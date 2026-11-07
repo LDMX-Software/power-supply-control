@@ -44,6 +44,8 @@ p.add_argument('--step-cmd', default=None, help='shell command run at each step 
 p.add_argument('--output', default=None, help='JSON prefix (default iv_<channels>_<time>), writes <prefix>_<ch>.json')
 p.add_argument('--vmax', type=float, default=10.0, help='refuse set points above this (default 10 V, hard cap 200 V)')
 p.add_argument('--hold', type=float, default=0.0, help='keep the last voltage this many seconds (still watched) before ramping down')
+p.add_argument('--adopt', action='store_true',
+               help='take over channels already on at the last set point and go straight to the hold')
 p.add_argument('--dry-run', action='store_true', help='only read, print what would be set')
 args = p.parse_args()
 chs = args.channels
@@ -238,8 +240,15 @@ for ch in chs:
                  vmeas=get('outputMeasurementTerminalVoltage', ch),
                  imeas=get('outputMeasurementCurrent', ch), status=status_flags(ch))
     print(f'{ch} now: {json.dumps(state)}')
-    if 'on' in state['switch'] or state['vset'] != 0.0:
+    if args.adopt:
+        # on, set and measured at the hold voltage
+        if 'on' not in state['switch'] or state['vset'] != args.voltages[-1] \
+                or abs(state['vmeas'] - args.voltages[-1]) > 1.0:
+            sys.exit(f'{ch} is not on at {args.voltages[-1]:g} V, cannot adopt')
+    elif 'on' in state['switch'] or state['vset'] != 0.0:
         sys.exit(f'{ch} is not off at 0 V, refusing to start')
+if args.adopt and args.hold <= 0:
+    sys.exit('--adopt needs --hold')
 if args.vmax > 200:
     sys.exit('--vmax above 200 V is not allowed by this script')
 if max(args.voltages) > args.vmax:
@@ -264,18 +273,23 @@ try:
         put('outputCurrent', ilim[ch], ch)
     put_all('outputVoltageRiseRate', args.rate)
     put_all('outputVoltageFallRate', args.rate)
-    put_all('outputVoltage', 0.0)
+    if args.adopt:
+        switched_on = True
+        log('adopted:', ' '.join(f'{ch}={get_str("outputSwitch", ch)}' for ch in chs))
+    else:
+        put_all('outputVoltage', 0.0)
     if args.dry_run:
         for v in args.voltages:
             put_all('outputVoltage', v)
         print('dry run done, nothing was changed')
         sys.exit(0)
-    put_all('outputSwitch', 1, kind='i')
-    switched_on = True
-    log('switched on:', ' '.join(f'{ch}={get_str("outputSwitch", ch)}' for ch in chs))
-    watch(30)
+    if not args.adopt:
+        put_all('outputSwitch', 1, kind='i')
+        switched_on = True
+        log('switched on:', ' '.join(f'{ch}={get_str("outputSwitch", ch)}' for ch in chs))
+        watch(30)
 
-    for vset in args.voltages:
+    for vset in ([] if args.adopt else args.voltages):
         log(f'--- {vset} V')
         t0, hist = time.time(), []
         cur = dict(v_set=vset, history=hist)
@@ -316,9 +330,23 @@ try:
         cur = None
     if args.hold > 0:
         log(f'holding {args.voltages[-1]:g} V for {args.hold:.0f} s')
+        # write a new total hold (s) into this file to extend or shorten
+        hold_file = f'{args.output}.hold' if args.output else None
+        hold = args.hold
+        if hold_file:
+            with open(hold_file, 'w') as f:
+                f.write(f'{hold:.0f}\n')
+            log(f'hold length in {hold_file}')
         t0 = time.time()
-        while time.time() - t0 < args.hold:
+        while time.time() - t0 < hold:
             time.sleep(args.poll)
+            try:
+                new = float(open(hold_file).read()) if hold_file else hold
+            except (OSError, ValueError):
+                new = hold
+            if new != hold:
+                log(f'hold changed {hold:.0f} -> {new:.0f} s')
+                hold = new
             r = read()
             check(r)
             if int(r[chs[0]]['t'] - t0) % 20 < args.poll:
