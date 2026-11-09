@@ -44,6 +44,8 @@ p.add_argument('--step-cmd', default=None, help='shell command run at each step 
 p.add_argument('--output', default=None, help='JSON prefix (default iv_<channels>_<time>), writes <prefix>_<ch>.json')
 p.add_argument('--vmax', type=float, default=10.0, help='refuse set points above this (default 10 V, hard cap 200 V)')
 p.add_argument('--hold', type=float, default=0.0, help='keep the last voltage this many seconds (still watched) before ramping down')
+p.add_argument('--read-fail-s', type=float, default=600.0,
+               help='during the hold, ride out SNMP read failures this long before aborting')
 p.add_argument('--adopt', action='store_true',
                help='take over channels already on at the last set point and go straight to the hold')
 p.add_argument('--dry-run', action='store_true', help='only read, print what would be set')
@@ -338,8 +340,21 @@ try:
                 f.write(f'{hold:.0f}\n')
             log(f'hold length in {hold_file}')
         t0 = time.time()
+        t_fail = None
         while time.time() - t0 < hold:
             time.sleep(args.poll)
+            # the crate stalls at times (07-Nov, 09-Nov); the HV module holds its voltage meanwhile
+            try:
+                r = read()
+            except Exception as e:
+                t_fail = t_fail or time.time()
+                log(f'  read failed for {time.time() - t_fail:.0f} s, still holding: {e}')
+                if time.time() - t_fail > args.read_fail_s:
+                    raise
+                continue
+            if t_fail:
+                log(f'  readings back after {time.time() - t_fail:.0f} s')
+                t_fail = None
             try:
                 new = float(open(hold_file).read()) if hold_file else hold
             except (OSError, ValueError):
@@ -347,7 +362,6 @@ try:
             if new != hold:
                 log(f'hold changed {hold:.0f} -> {new:.0f} s')
                 hold = new
-            r = read()
             check(r)
             if int(r[chs[0]]['t'] - t0) % 20 < args.poll:
                 log(f'  hold {r[chs[0]]["t"] - t0:5.0f} s  {fmt(r)}')
