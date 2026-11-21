@@ -44,8 +44,8 @@ p.add_argument('--step-cmd', default=None, help='shell command run at each step 
 p.add_argument('--output', default=None, help='JSON prefix (default iv_<channels>_<time>), writes <prefix>_<ch>.json')
 p.add_argument('--vmax', type=float, default=10.0, help='refuse set points above this (default 10 V, hard cap 200 V)')
 p.add_argument('--hold', type=float, default=0.0, help='keep the last voltage this many seconds (still watched) before ramping down')
-p.add_argument('--read-fail-s', type=float, default=600.0,
-               help='during the hold, ride out SNMP read failures this long before aborting')
+p.add_argument('--read-fail-s', type=float, default=0.0,
+               help='during the hold, abort after SNMP read failures this long (0 = never, the module current trip protects)')
 p.add_argument('--adopt', action='store_true',
                help='take over channels already on at the last set point and go straight to the hold')
 p.add_argument('--dry-run', action='store_true', help='only read, print what would be set')
@@ -242,6 +242,10 @@ for ch in chs:
                  vmeas=get('outputMeasurementTerminalVoltage', ch),
                  imeas=get('outputMeasurementCurrent', ch), status=status_flags(ch))
     print(f'{ch} now: {json.dumps(state)}')
+    # bits 6-7: action on max current, 0 = ignore
+    sup = int(get_str('outputSupervisionBehavior', ch).split()[0])
+    if not (sup >> 6) & 3:
+        sys.exit(f'{ch} has no hardware current trip (outputSupervisionBehavior {sup}), refusing to start')
     if args.adopt:
         # on, set and measured at the hold voltage
         if 'on' not in state['switch'] or state['vset'] != args.voltages[-1] \
@@ -349,7 +353,7 @@ try:
             except Exception as e:
                 t_fail = t_fail or time.time()
                 log(f'  read failed for {time.time() - t_fail:.0f} s, still holding: {e}')
-                if time.time() - t_fail > args.read_fail_s:
+                if args.read_fail_s and time.time() - t_fail > args.read_fail_s:
                     raise
                 continue
             if t_fail:
