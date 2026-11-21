@@ -1,9 +1,6 @@
 # vim cache file
 .*.swp
 
-# short names for Hcal power supplies
-.hcal-power-supply-names.json
-
 # python cache
 __pycache__
 
