@@ -32,37 +32,39 @@ The HV and LV power supplies are B&K Precision 1698.
 > normal operating current (~1A), so the power supply current limit should
 > be set to 3A to allow this pulse through when the power is initially connected.
 
+In order to provide access to these power supplies via the USB connection to
+the server, your friendly neighborhood administrator needs to `sudo chmod 666 /dev/ttyUSBii`
+for the specific USB number enumerated after the DAQ server is powered on.
+
 ### Usage
 Use the `USBmappingJSON.sh` script to list out the different devices connected via USB.
 ```
 ./USBmappingJSON.sh
 ```
 From this list, you can use the `Serial` column as the `--serial` argument and the VID:PID
-column as the `--vid_pid` argument. You can also create a JSON file in this directory
-named `.hcal-power-supply-names.json` to use as a cache for these values. They only
-depend on the power supply actually in use.
-The file used for the 2026 cosmics test stand looked like
-```json
-{
-  "hcal-hv": {
-    "serial": "0000:00:14.0",
-    "vid_pid": "067b:2303"
-  },
-  "hcal-lv": {
-    "serial": "AL05K8T0",
-    "vid_pid": "0403:6001"
-  }
-}
-```
+column as the `--vid_pid` argument. The file used for the 2026 cosmics test stand is
+[kept in this repository](.hcal-power-supply-names.json) for reference. It only needs to
+be changed if the hardware itself changes.
 
 And then you `--read` the current settings.
 ```
-sudo python hcal-ps-control.py --name hcal-hv --read
+python hcal-ps-control.py --name hhv --read
 ```
 and turn on/off with the `--output` argument.
 ```
-sudo python hcal-ps-control.py --name hcal-lv --output True
+python hcal-ps-control.py --name lv --output on
 ```
-In order to avoid `sudo` you can ask your friendly neighborhood
-administrator to `sudo chmod 666` the `/dev/ttyUSBii` file that
-is reported by the USB mapping to be connected the power supply.
+
+## TS PS Control
+One of the TS power supplies is a B&K Precision that is also serially connected to the DAQ server over USB like the HCal poewr supplies.
+The other is a Rigol connected to the DAQ server over Ethernet.
+
+### Dependencies
+Same comment about permissions changes for USB connections after the DAQ server
+is re-powered and the USB devices re-enumerated.
+
+The `vxi11` python package is used for interacting with the Rigol. I don't know which one it is.
+
+### Usage
+The `USBmappingJSON.sh` can be used to deduce which USB device is the TS B&K Precision.
+Similar network-scanning utilities can check the LAN for the Rigol.
